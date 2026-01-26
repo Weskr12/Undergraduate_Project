@@ -14,6 +14,7 @@ PROJECT_ROOT = SCRIPT_DIR.parent  # 上一層目錄是 Project
 
 MODEL_PATH = SCRIPT_DIR / 'models' / 'model_best' / 'best_modelv1' / 'weights' / 'best.pt'
 
+#compaerison model
 
 MODEL_PATH2 = SCRIPT_DIR / 'models' / 'model_20260124' / 'Traffic_Sign_Project' / 'single_class_run4' / 'weights' / 'best.pt'
 # 2. 測試模式選擇
