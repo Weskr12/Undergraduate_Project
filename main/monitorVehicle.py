@@ -1,6 +1,31 @@
 # -*- coding: utf-8 -*-
 # Auto-exported from monitorVehicle.ipynb
 
+"""
+monitorVehicle.py
+
+用途:
+離線執行車輛/機車偵測、追蹤、深度距離估測與右側雷達視覺化輸出。
+
+執行前需求:
+- YOLO 權重: model/weights/best.pt
+- Depth Pro 權重: _tmp_ml_depth_pro/checkpoints/depth_pro.pt
+- 測試影片: dataset/*.MP4
+
+執行方式:
+- 直接匯入後呼叫 run_mvp_pipeline(...)
+- 或將檔案底部的 RUN_FULL_PIPELINE / RUN_SMOKE_TEST 改為 True 後執行
+
+主要輸出:
+- 標註影片: output/*.mp4
+- 每幀時間線: output/*.jsonl
+- 即時摘要: output/*.json
+
+說明:
+- 程式會優先使用 GPU(CUDA)；若無可用 GPU，則自動退回 CPU。
+- 若使用非 metric depth backend，需提供 output/depth_calibration.json 做距離校正。
+"""
+
 # %% [code] cell 0
 import importlib
 import gc
