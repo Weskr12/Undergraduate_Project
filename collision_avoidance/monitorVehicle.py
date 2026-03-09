@@ -9,7 +9,7 @@ monitorVehicle.py
 
 執行前需求:
 - YOLO 權重: model/weights/best.pt
-- Depth Pro 權重: _tmp_ml_depth_pro/checkpoints/depth_pro.pt
+- Depth Pro 權重: checkpoints/depth_pro.pt
 - 測試影片: dataset/*.MP4
 
 執行方式:
@@ -17,13 +17,23 @@ monitorVehicle.py
 - 或將檔案底部的 RUN_FULL_PIPELINE / RUN_SMOKE_TEST 改為 True 後執行
 
 主要輸出:
-- 標註影片: output/*.mp4
-- 每幀時間線: output/*.jsonl
-- 即時摘要: output/*.json
+- 標註影片: output/videos/*.mp4
+- 每幀時間線: output/json/*.jsonl
+- 即時摘要: output/json/*.json
 
 說明:
 - 程式會優先使用 GPU(CUDA)；若無可用 GPU，則自動退回 CPU。
-- 若使用非 metric depth backend，需提供 output/depth_calibration.json 做距離校正。
+- 若使用非 metric depth backend，需提供 output/calibration/depth_calibration.json 做距離校正。
+- 舊版路徑 _tmp_ml_depth_pro/ 與 output/depth_calibration.json 仍可相容讀取。
+
+建議專案結構:
+- dataset/: 輸入影片
+- model/weights/: YOLO 權重
+- checkpoints/: Depth Pro 權重
+- output/videos/: 輸出影片
+- output/json/: JSON / JSONL
+- output/calibration/: 距離校正檔
+- third_party/ml_depth_pro/: Depth Pro 原始碼
 """
 
 # %% [code] cell 0
@@ -42,22 +52,82 @@ import numpy as np
 import torch
 from ultralytics import YOLO
 
+
+def _find_project_root():
+    script_dir = Path(__file__).resolve().parent
+    candidates = [script_dir, script_dir.parent]
+    root_markers = (
+        "dataset",
+        "model",
+        "output",
+        "checkpoints",
+        "_tmp_ml_depth_pro",
+        "third_party",
+    )
+
+    for candidate in candidates:
+        if any((candidate / marker).exists() for marker in root_markers):
+            return candidate
+
+    if script_dir.name.lower() == "main":
+        return script_dir.parent
+    return script_dir
+
+
+def _prefer_existing_path(primary, *fallbacks):
+    primary = Path(primary)
+    for candidate in (primary, *fallbacks):
+        candidate = Path(candidate)
+        if candidate.exists():
+            return candidate
+    return primary
+
+
+PROJECT_ROOT = _find_project_root()
+SCRIPT_DIR = Path(__file__).resolve().parent
+DATASET_DIR = PROJECT_ROOT / "dataset"
+MODEL_DIR = PROJECT_ROOT / "model"
+MODEL_WEIGHTS_DIR = MODEL_DIR / "weights"
+CHECKPOINTS_DIR = PROJECT_ROOT / "checkpoints"
+OUTPUT_DIR = PROJECT_ROOT / "output"
+OUTPUT_VIDEO_DIR = OUTPUT_DIR / "videos"
+OUTPUT_JSON_DIR = OUTPUT_DIR / "json"
+OUTPUT_CALIB_DIR = OUTPUT_DIR / "calibration"
+THIRD_PARTY_DIR = PROJECT_ROOT / "third_party"
+LEGACY_DEPTH_PRO_DIR = PROJECT_ROOT / "_tmp_ml_depth_pro"
+DEPTH_PRO_SOURCE_DIR = THIRD_PARTY_DIR / "ml_depth_pro"
+
 RUN_ID = f"{time.strftime('%Y%m%d_%H%M%S')}_test1_mvp"
 
-YOLO_MODEL_PATH = Path("model/weights/best.pt")
+YOLO_MODEL_PATH = _prefer_existing_path(
+    MODEL_WEIGHTS_DIR / "best.pt",
+    PROJECT_ROOT / "model/weights/best.pt",
+)
 DEPTH_BACKEND = "depth_pro"
 DEPTH_ANYTHING_MODEL_ID = "depth-anything/Depth-Anything-V2-Small-hf"
-DEPTH_PRO_REPO_SRC = Path("_tmp_ml_depth_pro/src")
-DEPTH_PRO_CHECKPOINT = Path("_tmp_ml_depth_pro/checkpoints/depth_pro.pt")
+DEPTH_PRO_REPO_SRC = _prefer_existing_path(
+    DEPTH_PRO_SOURCE_DIR / "src",
+    LEGACY_DEPTH_PRO_DIR / "src",
+)
+DEPTH_PRO_CHECKPOINT = _prefer_existing_path(
+    CHECKPOINTS_DIR / "depth_pro.pt",
+    LEGACY_DEPTH_PRO_DIR / "checkpoints/depth_pro.pt",
+)
 PREFERRED_DEVICE = "auto"
 PREFER_HALF_PRECISION = True
 YOLO_INFER_IMGSZ = 640
 
-DEFAULT_VIDEO_PATH = Path("dataset/test1.MP4")
-DEFAULT_OUTPUT_VIDEO = Path("output/test1_mvp_annotated.mp4")
-DEFAULT_TIMELINE_JSONL = Path("output/radar_timeline.jsonl")
-DEFAULT_LIVE_JSON = Path("output/radar_live.json")
-DEFAULT_CALIB_PATH = Path("output/depth_calibration.json")
+DEFAULT_VIDEO_PATH = _prefer_existing_path(
+    DATASET_DIR / "test1.MP4",
+    DATASET_DIR / "test1.mp4",
+)
+DEFAULT_OUTPUT_VIDEO = OUTPUT_VIDEO_DIR / "test1_mvp_annotated.mp4"
+DEFAULT_TIMELINE_JSONL = OUTPUT_JSON_DIR / "radar_timeline.jsonl"
+DEFAULT_LIVE_JSON = OUTPUT_JSON_DIR / "radar_live.json"
+DEFAULT_CALIB_PATH = _prefer_existing_path(
+    OUTPUT_CALIB_DIR / "depth_calibration.json",
+    OUTPUT_DIR / "depth_calibration.json",
+)
 
 VEHICLE_CLASSES = [0, 1, 2, 3, 4, 5]
 HOOK_TURN_CLASS_ID = 5
