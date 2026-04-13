@@ -1,18 +1,13 @@
-
-*.pt
-*.pth
-.ipynb_checkpoints/
-__pycache__/
-*.ipynb
-
+# ---- Large binary assets (kept locally, NOT pushed to GitHub) ----
+# Keep folder structure on GitHub via .gitkeep placeholders.
 dataset/*
 !dataset/.gitkeep
 
-model/weights/*
-!model/weights/.gitkeep
-
 checkpoints/*
 !checkpoints/.gitkeep
+
+model/weights/*
+!model/weights/.gitkeep
 
 output/videos/*
 !output/videos/.gitkeep
@@ -22,3 +17,42 @@ output/json/*
 
 output/calibration/*
 !output/calibration/.gitkeep
+
+# Vendored third-party source (re-clone separately if needed)
+third_party/
+
+# ---- Model / notebook artifacts ----
+*.pt
+*.pth
+*.ipynb
+.ipynb_checkpoints/
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+.eggs/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+env/
+
+# ---- IDE / OS ----
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# ---- Backups ----
+*.backup
+collision_avoidance/monitorVehicle.py.backup
+
+# ---- Local-only docs / tests ----
+CLAUDE.md
+tests/
+
+# ---- Logs ----
+*.log
