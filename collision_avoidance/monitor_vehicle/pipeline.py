@@ -34,6 +34,13 @@ from .config import (
     MIN_DEPTH,
     MIN_RELIABLE_BBOX_AREA_PX,
     VERY_FAR_DISTANCE_CLAMP_M,
+    YOLO_FAR_DEPTH_CONFIDENCE,
+    YOLO_FAR_DISTANCE_M,
+    YOLO_FAR_FALLBACK_ENABLED,
+    YOLO_FAR_MAX_BBOX_AREA_PX,
+    YOLO_FAR_MAX_BBOX_HEIGHT_PX,
+    YOLO_FAR_MAX_BBOX_WIDTH_PX,
+    YOLO_FAR_MIN_CONFIDENCE,
 )
 from .depth.backends import infer_depth_map, load_depth_model
 from .depth.calibration import load_calibration, raw_depth_to_distance_m
@@ -266,6 +273,27 @@ def _risk_level_with_confidence(distance_m, approach_mps, depth_confidence, dept
     return _risk_level(distance_m, approach_mps)
 
 
+def _bbox_size_debug_from_xyxy(bbox):
+    x1, y1, x2, y2 = [int(v) for v in bbox]
+    width = max(0, x2 - x1)
+    height = max(0, y2 - y1)
+    return width, height, width * height
+
+
+def _is_yolo_far_candidate(bbox, det_confidence):
+    if not YOLO_FAR_FALLBACK_ENABLED:
+        return False
+    if det_confidence is None or float(det_confidence) < YOLO_FAR_MIN_CONFIDENCE:
+        return False
+
+    width, height, area = _bbox_size_debug_from_xyxy(bbox)
+    return (
+        width <= YOLO_FAR_MAX_BBOX_WIDTH_PX
+        or height <= YOLO_FAR_MAX_BBOX_HEIGHT_PX
+        or area <= YOLO_FAR_MAX_BBOX_AREA_PX
+    )
+
+
 def _append_rejected_depth_candidate(track_id, timestamp_ms, raw_depth_m, depth_confidence, bbox_area, tracking_state):
     candidates = tracking_state["rejected_depth_candidates"][track_id]
     candidates.append(
@@ -397,6 +425,7 @@ def _estimate_detection_state(
     det_idx,
     track_id,
     bbox,
+    det_confidence,
     timestamp_ms,
     is_hook_turn,
     stable_for_ttc,
@@ -588,6 +617,32 @@ def _estimate_detection_state(
                 }
             )
 
+    if (not is_hook_turn) and distance_m is None and _is_yolo_far_candidate(bbox, det_confidence):
+        bbox_width, bbox_height, bbox_area = _bbox_size_debug_from_xyxy(bbox)
+        distance_m = float(YOLO_FAR_DISTANCE_M)
+        approach_mps = 0.0
+        det_depth_stale = True
+        depth_debug.update(
+            {
+                "depth_source": "yolo_size_fallback",
+                "depth_quality": "weak",
+                "depth_confidence": float(YOLO_FAR_DEPTH_CONFIDENCE),
+                "depth_smooth_m": distance_m,
+                "depth_used_m": distance_m,
+                "distance_after_gate_m": distance_m,
+                "distance_smooth_m": distance_m,
+                "distance_source": "yolo_size_fallback",
+                "gate_decision": "accepted",
+                "gate_reason": "yolo_small_bbox_far_fallback",
+                "is_outlier": False,
+                "outlier_reason": None,
+                "bbox_width_px": depth_debug.get("bbox_width_px") or int(bbox_width),
+                "bbox_height_px": depth_debug.get("bbox_height_px") or int(bbox_height),
+                "bbox_area_px": depth_debug.get("bbox_area_px") or int(bbox_area),
+                "bbox_area": depth_debug.get("bbox_area") or int(bbox_area),
+            }
+        )
+
     if track_id >= 0:
         previous_band = tracking_state["distance_band_state"].get(track_id)
         distance_band = _distance_band_with_hysteresis(distance_m, previous_band)
@@ -681,6 +736,7 @@ def _process_frame_detections(
             det_idx=det_idx,
             track_id=track_id,
             bbox=bbox,
+            det_confidence=float(det.get("confidence", 0.0)),
             timestamp_ms=timestamp_ms,
             is_hook_turn=is_hook_turn,
             stable_for_ttc=stable_for_ttc,
