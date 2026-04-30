@@ -1,37 +1,60 @@
 # -*- coding: utf-8 -*-
 """All module-level constants used across the monitor_vehicle sub-package."""
 
-INPUT_VIDEO_NAME = "data0_30s.mp4"
+INPUT_VIDEO_NAME = "close_back1_test.MP4"
 RUN_SMOKE_TEST = False
 RUN_FULL_PIPELINE = True
 SMOKE_TEST_MAX_FRAMES = 100
 
-VEHICLE_CLASSES = [0, 1, 2, 3, 4, 5]
-HOOK_TURN_CLASS_ID = 5
+VEHICLE_CLASSES = [0, 1, 2, 3, 4]
+HOOK_TURN_CLASS_ID = 4
 TRACKER_PATH = "bytetrack.yaml"
 
 CONF_THRESHOLDS = {
-    0: 0.5,
-    1: 0.5,
-    2: 0.5,
-    3: 0.5,
-    4: 0.5,
-    5: 0.1,
+    0: 0.25,
+    1: 0.25,
+    2: 0.25,
+    3: 0.25,
+    4: 0.1,
 }
 
 DEPTH_BACKEND = "depth_pro"
 DEPTH_ANYTHING_MODEL_ID = "depth-anything/Depth-Anything-V2-Small-hf"
 PREFERRED_DEVICE = "auto"
 PREFER_HALF_PRECISION = True
+YOLO_MODEL_NAME = "best0418.pt"
 YOLO_INFER_IMGSZ = 640
 
 DEPTH_RESIZE_WIDTH = 640
 DEPTH_INFER_EVERY_N = 2
 DEPTH_PRO_CPU_INFER_EVERY_N = 2
 DEPTH_PRIORITY_MAX_TARGETS = 4
+DEPTH_SAMPLE_PERCENTILE = 35
 MIN_DEPTH = 1e-6
+MAX_VALID_DEPTH_M = 80.0
+MIN_DEPTH_VALID_RATIO = 0.25
+MAX_DEPTH_ROI_IQR_M = 8.0
+DEPTH_MAX_ABS_JUMP_M = 12.0
+DEPTH_MAX_REL_JUMP = 0.45
+DEPTH_MAX_PLAUSIBLE_SPEED_MPS = 35.0
+DEPTH_MIN_CONFIDENCE_FOR_BASELINE = 0.5
+DEPTH_RECOVERY_MIN_CONSECUTIVE = 3
+DEPTH_RECOVERY_MAX_CANDIDATES = 5
+DEPTH_RECOVERY_MIN_CONFIDENCE = 0.55
+DEPTH_NEAR_LOCK_RECOVERY_MAX_M = 1.5
+DEPTH_NEAR_LOCK_RECOVERY_RAW_MIN_M = 3.0
+DEPTH_RELIABLE_MAX_M = 20.0
+DEPTH_DISPLAY_MAX_M = 30.0
+DEPTH_VERY_FAR_M = 25.0
+MIN_RELIABLE_BBOX_WIDTH_PX = 35
+MIN_RELIABLE_BBOX_HEIGHT_PX = 35
+MIN_RELIABLE_BBOX_AREA_PX = 1500
+FAR_DISTANCE_CLAMP_M = 22.0
+VERY_FAR_DISTANCE_CLAMP_M = 28.0
 
 TRACK_STALE_FRAMES = 60
+DETECTION_HOLD_FRAMES = 12
+DRAW_HELD_DETECTIONS = False
 DISTANCE_HISTORY_LEN = 8
 TRACK_STABILITY_WINDOW = 6
 
@@ -51,9 +74,11 @@ BEARING_EMA_ALPHA = 0.3
 HFOV_DEG = 141.0
 
 RADAR_PANEL_WIDTH = 320
+RADAR_SHOW_TEMP_TRACKS = False
 RADAR_BEARING_CUTOFF_DEG = 20.0
-RADAR_BANDS = ("far", "mid", "near")
+RADAR_BANDS = ("very_far", "far", "mid", "near")
 RADAR_BAND_LABELS = {
+    "very_far": "VERY FAR",
     "far": "FAR",
     "mid": "MID",
     "near": "NEAR",
@@ -90,6 +115,8 @@ RISK_COLORS = {
     "medium": (0, 220, 255),
     "low": (0, 200, 0),
     "unknown": (128, 128, 128),
+    "medium_uncertain": (0, 180, 180),
+    "close_unknown": (0, 180, 255),
     "info": (255, 0, 255),
 }
 
@@ -99,4 +126,6 @@ RISK_SEVERITY = {
     "medium": 2,
     "low": 1,
     "unknown": 0,
+    "medium_uncertain": 2,
+    "close_unknown": 2,
 }

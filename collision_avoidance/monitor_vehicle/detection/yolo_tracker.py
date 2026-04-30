@@ -64,30 +64,53 @@ def _detect_with_tracking(frame_bgr, yolo_model, next_temp_track_id, runtime):
     if runtime["use_half"]:
         infer_kwargs["half"] = True
 
+    def _retry_without_half(fn, kwargs):
+        try:
+            return fn(**kwargs), None
+        except Exception as exc:
+            if not kwargs.get("half"):
+                return None, exc
+
+            fp32_kwargs = dict(kwargs)
+            fp32_kwargs.pop("half", None)
+            try:
+                return fn(**fp32_kwargs), exc
+            except Exception as retry_exc:
+                return None, retry_exc
+
     try:
-        track_results = yolo_model.track(
+        track_call = lambda **kwargs: yolo_model.track(
             frame_bgr,
             persist=True,
             tracker=TRACKER_PATH,
-            **infer_kwargs,
+            **kwargs,
         )
+        track_results, track_exception = _retry_without_half(track_call, infer_kwargs)
     except Exception as exc:
-        track_results = None
-        track_exception = exc
+        track_results, track_exception = None, exc
 
     if track_results and len(track_results) > 0:
         track_boxes = track_results[0].boxes
-        if track_boxes is not None and len(track_boxes) > 0 and getattr(track_boxes, "id", None) is not None:
+        if track_boxes is not None and len(track_boxes) > 0:
+            has_track_ids = getattr(track_boxes, "id", None) is not None
             detections, next_temp_track_id = _extract_detections_from_boxes(
                 track_boxes,
                 yolo_model.names,
                 frame_bgr.shape,
                 next_temp_track_id,
-                force_temp_ids=False,
+                force_temp_ids=not has_track_ids,
             )
-            return detections, next_temp_track_id, "track", track_exception
+            mode_used = "track" if has_track_ids else "track_temp_ids"
+            return detections, next_temp_track_id, mode_used, track_exception
+        return [], next_temp_track_id, "track_empty", track_exception
 
-    detect_results = yolo_model(frame_bgr, **infer_kwargs)
+    detect_call = lambda **kwargs: yolo_model(frame_bgr, **kwargs)
+    detect_results, detect_exception = _retry_without_half(detect_call, infer_kwargs)
+    if detect_exception is not None:
+        track_exception = detect_exception
+    if detect_results is None:
+        return [], next_temp_track_id, "detect_failed", track_exception
+
     detect_boxes = detect_results[0].boxes if detect_results and len(detect_results) > 0 else None
 
     detections, next_temp_track_id = _extract_detections_from_boxes(

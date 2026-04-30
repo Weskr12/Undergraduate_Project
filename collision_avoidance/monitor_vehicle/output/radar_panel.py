@@ -22,6 +22,7 @@ from ..config import (
     RADAR_PANEL_WIDTH,
     RADAR_PLOT_BG_COLOR,
     RADAR_POSITION_EMA_ALPHA,
+    RADAR_SHOW_TEMP_TRACKS,
     RADAR_SUBTEXT_COLOR,
     RADAR_TEXT_COLOR,
     RADAR_TRAIL_FADE_MIN_ALPHA,
@@ -136,6 +137,8 @@ def _iter_radar_detections(detections):
     for det in detections:
         if det.get("hook_turn_detected"):
             continue
+        if int(det.get("track_id", -1)) < 0 and not RADAR_SHOW_TEMP_TRACKS:
+            continue
         distance_m = to_float_or_none(det.get("distance_m"))
         bearing_deg = to_float_or_none(det.get("bearing_deg"))
         if distance_m is None or bearing_deg is None:
@@ -150,12 +153,15 @@ def _distance_to_plot_fraction(distance_m):
 
     if distance <= 8.0:
         progress = np.clip(distance / 8.0, 0.0, 1.0)
-        return float(1.0 - progress * (1.0 / 3.0))
+        return float(1.0 - progress * 0.25)
     if distance <= 15.0:
         progress = np.clip((distance - 8.0) / 7.0, 0.0, 1.0)
-        return float((2.0 / 3.0) - progress * (1.0 / 3.0))
-    progress = np.clip((distance - 15.0) / max(RADAR_MAX_DISTANCE_M - 15.0, 1e-6), 0.0, 1.0)
-    return float((1.0 / 3.0) - progress * (1.0 / 3.0))
+        return float(0.75 - progress * 0.25)
+    if distance <= 25.0:
+        progress = np.clip((distance - 15.0) / 10.0, 0.0, 1.0)
+        return float(0.5 - progress * 0.25)
+    progress = np.clip((distance - 25.0) / max(RADAR_MAX_DISTANCE_M - 25.0, 1e-6), 0.0, 1.0)
+    return float(0.25 - progress * 0.25)
 
 
 def _radar_target_position(det, plot_left, plot_top, plot_right, plot_bottom):
@@ -287,30 +293,26 @@ def _draw_radar_guides(panel, plot_left, plot_top, plot_right, plot_bottom):
 
     plot_height = plot_bottom - plot_top
     plot_width = plot_right - plot_left
-    far_y = plot_top + int(round(plot_height / 3.0))
-    mid_y = plot_top + int(round(plot_height * 2.0 / 3.0))
     center_x = plot_left + plot_width // 2
 
     cv2.line(panel, (center_x, plot_top), (center_x, plot_bottom), RADAR_BORDER_COLOR, 1)
-    cv2.line(panel, (plot_left, far_y), (plot_right, far_y), RADAR_BORDER_COLOR, 1)
-    cv2.line(panel, (plot_left, mid_y), (plot_right, mid_y), RADAR_BORDER_COLOR, 1)
+    band_count = max(1, len(RADAR_BANDS))
+    for idx in range(1, band_count):
+        band_y = plot_top + int(round(plot_height * idx / float(band_count)))
+        cv2.line(panel, (plot_left, band_y), (plot_right, band_y), RADAR_BORDER_COLOR, 1)
 
     cv2.putText(panel, "L", (plot_left + 2, plot_bottom + 18), cv2.FONT_HERSHEY_SIMPLEX, 0.45, RADAR_SUBTEXT_COLOR, 1)
     cv2.putText(panel, "C", (center_x - 6, plot_bottom + 18), cv2.FONT_HERSHEY_SIMPLEX, 0.45, RADAR_SUBTEXT_COLOR, 1)
     cv2.putText(panel, "R", (plot_right - 12, plot_bottom + 18), cv2.FONT_HERSHEY_SIMPLEX, 0.45, RADAR_SUBTEXT_COLOR, 1)
 
-    band_positions = {
-        "far": plot_top + 22,
-        "mid": far_y + 22,
-        "near": mid_y + 22,
-    }
-    for band in RADAR_BANDS:
+    for band_idx, band in enumerate(RADAR_BANDS):
+        band_top = plot_top + int(round(plot_height * band_idx / float(band_count)))
         cv2.putText(
             panel,
             RADAR_BAND_LABELS[band],
-            (plot_left + 8, band_positions[band]),
+            (plot_left + 8, band_top + 22),
             cv2.FONT_HERSHEY_SIMPLEX,
-            0.48,
+            0.42 if len(RADAR_BAND_LABELS[band]) > 6 else 0.48,
             RADAR_SUBTEXT_COLOR,
             1,
         )

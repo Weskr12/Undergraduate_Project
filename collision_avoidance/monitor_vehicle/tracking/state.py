@@ -6,6 +6,7 @@ from collections import defaultdict, deque
 import numpy as np
 
 from ..config import (
+    DEPTH_RECOVERY_MAX_CANDIDATES,
     DISTANCE_HISTORY_LEN,
     RADAR_TRAIL_LENGTH,
     TRACK_STABILITY_WINDOW,
@@ -18,9 +19,14 @@ from ..risk import _is_stable_for_ttc
 def _create_pipeline_tracking_state():
     return {
         "distance_history": defaultdict(lambda: deque(maxlen=DISTANCE_HISTORY_LEN)),
+        "distance_confidence_history": defaultdict(lambda: deque(maxlen=DISTANCE_HISTORY_LEN)),
+        "rejected_depth_candidates": defaultdict(lambda: deque(maxlen=DEPTH_RECOVERY_MAX_CANDIDATES)),
+        "distance_band_state": {},
         "track_observation_history": defaultdict(lambda: deque(maxlen=TRACK_STABILITY_WINDOW)),
         "display_track_state": {},
+        "track_hit_count": defaultdict(int),
         "last_seen_frame": {},
+        "last_output_objects": {},
         "next_temp_track_id": -1,
         "last_depth_map": None,
         "radar_position_ema": {},
@@ -55,9 +61,14 @@ def _cleanup_stale_tracks(frame_idx, tracking_state):
     ]
     for tid in stale_track_ids:
         tracking_state["last_seen_frame"].pop(tid, None)
+        tracking_state["last_output_objects"].pop(tid, None)
         tracking_state["distance_history"].pop(tid, None)
+        tracking_state["distance_confidence_history"].pop(tid, None)
+        tracking_state["rejected_depth_candidates"].pop(tid, None)
+        tracking_state["distance_band_state"].pop(tid, None)
         tracking_state["track_observation_history"].pop(tid, None)
         tracking_state["display_track_state"].pop(tid, None)
+        tracking_state["track_hit_count"].pop(tid, None)
         tracking_state["radar_position_ema"].pop(tid, None)
         tracking_state["radar_position_history"].pop(tid, None)
         tracking_state["position_xz_history"].pop(tid, None)

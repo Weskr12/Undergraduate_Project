@@ -30,9 +30,9 @@ from monitor_vehicle.depth.calibration import calibration_template
 from monitor_vehicle.output.payload import _validate_payload_schema
 from monitor_vehicle.paths import (
     DEFAULT_CALIB_PATH,
-    DEFAULT_LIVE_JSON,
     DEFAULT_OUTPUT_VIDEO,
     DEFAULT_TIMELINE_JSONL,
+    DEFAULT_TIMELINE_PRETTY_JSON,
     DEFAULT_VIDEO_PATH,
 )
 
@@ -48,8 +48,9 @@ if RUN_SMOKE_TEST:
         video_path=DEFAULT_VIDEO_PATH,
         output_video_path=DEFAULT_OUTPUT_VIDEO,
         timeline_jsonl_path=DEFAULT_TIMELINE_JSONL,
-        live_json_path=DEFAULT_LIVE_JSON,
+        live_json_path=None,
         calib_path=DEFAULT_CALIB_PATH,
+        timeline_pretty_json_path=DEFAULT_TIMELINE_PRETTY_JSON,
         max_frames=SMOKE_TEST_MAX_FRAMES,
     )
 
@@ -61,7 +62,6 @@ if RUN_SMOKE_TEST:
 
     first_payload = json.loads(lines[0])
     _validate_payload_schema(first_payload)
-    json.loads(DEFAULT_LIVE_JSON.read_text(encoding="utf-8"))
     print("Smoke test passed")
 
 if RUN_FULL_PIPELINE:
@@ -69,8 +69,9 @@ if RUN_FULL_PIPELINE:
         video_path=DEFAULT_VIDEO_PATH,
         output_video_path=DEFAULT_OUTPUT_VIDEO,
         timeline_jsonl_path=DEFAULT_TIMELINE_JSONL,
-        live_json_path=DEFAULT_LIVE_JSON,
+        live_json_path=None,
         calib_path=DEFAULT_CALIB_PATH,
+        timeline_pretty_json_path=DEFAULT_TIMELINE_PRETTY_JSON,
     )
     print("Full run summary:")
     print(json.dumps(full_summary, ensure_ascii=False, indent=2))

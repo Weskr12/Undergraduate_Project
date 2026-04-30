@@ -18,6 +18,15 @@ output/json/*
 output/calibration/*
 !output/calibration/.gitkeep
 
+# Per-video generated outputs (annotated videos and radar timelines)
+output/*/
+!output/calibration/
+!output/json/
+!output/videos/
+
+# Scratch outputs and local analysis artifacts
+temp/
+
 # Vendored third-party source (re-clone separately if needed)
 third_party/
 
