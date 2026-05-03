@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """All module-level constants used across the monitor_vehicle sub-package."""
 
-INPUT_VIDEO_NAME = "close_back1_test.MP4"
+INPUT_VIDEO_NAME = "0503.MP4"
 RUN_SMOKE_TEST = False
 RUN_FULL_PIPELINE = True
 SMOKE_TEST_MAX_FRAMES = 100
@@ -13,8 +13,8 @@ TRACKER_PATH = "bytetrack.yaml"
 CONF_THRESHOLDS = {
     0: 0.25,
     1: 0.25,
-    2: 0.25,
-    3: 0.25,
+    2: 1,
+    3: 1,
     4: 0.1,
 }
 
