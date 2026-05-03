@@ -6,7 +6,6 @@ import math
 import numpy as np
 
 from .config import (
-    DEPTH_VERY_FAR_M,
     DEPTH_PRIORITY_MAX_TARGETS,
     HFOV_DEG,
     HOOK_TURN_CLASS_ID,
@@ -30,9 +29,7 @@ def _distance_band(distance_m):
         return "near"
     if distance_m <= 15.0:
         return "mid"
-    if distance_m <= DEPTH_VERY_FAR_M:
-        return "far"
-    return "very_far"
+    return "far"
 
 
 def _distance_band_with_hysteresis(distance_m, previous_band=None):
@@ -51,11 +48,7 @@ def _distance_band_with_hysteresis(distance_m, previous_band=None):
     if previous == "far":
         if distance_m < 14.5:
             return "mid"
-        if distance_m > 26.0:
-            return "very_far"
         return "far"
-    if previous == "very_far":
-        return "far" if distance_m < 22.0 else "very_far"
     return _distance_band(distance_m)
 
 

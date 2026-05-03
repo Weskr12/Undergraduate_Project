@@ -153,15 +153,12 @@ def _distance_to_plot_fraction(distance_m):
 
     if distance <= 8.0:
         progress = np.clip(distance / 8.0, 0.0, 1.0)
-        return float(1.0 - progress * 0.25)
+        return float(1.0 - progress / 3.0)
     if distance <= 15.0:
         progress = np.clip((distance - 8.0) / 7.0, 0.0, 1.0)
-        return float(0.75 - progress * 0.25)
-    if distance <= 25.0:
-        progress = np.clip((distance - 15.0) / 10.0, 0.0, 1.0)
-        return float(0.5 - progress * 0.25)
-    progress = np.clip((distance - 25.0) / max(RADAR_MAX_DISTANCE_M - 25.0, 1e-6), 0.0, 1.0)
-    return float(0.25 - progress * 0.25)
+        return float((2.0 / 3.0) - progress / 3.0)
+    progress = np.clip((distance - 15.0) / max(RADAR_MAX_DISTANCE_M - 15.0, 1e-6), 0.0, 1.0)
+    return float((1.0 / 3.0) - progress / 3.0)
 
 
 def _radar_target_position(det, plot_left, plot_top, plot_right, plot_bottom):

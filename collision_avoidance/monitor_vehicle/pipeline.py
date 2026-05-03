@@ -24,7 +24,6 @@ from .config import (
     DEPTH_RECOVERY_MIN_CONFIDENCE,
     DEPTH_RECOVERY_MIN_CONSECUTIVE,
     DEPTH_RELIABLE_MAX_M,
-    DEPTH_VERY_FAR_M,
     DETECTION_HOLD_FRAMES,
     DRAW_HELD_DETECTIONS,
     FAR_DISTANCE_CLAMP_M,
@@ -33,7 +32,6 @@ from .config import (
     MAX_VALID_DEPTH_M,
     MIN_DEPTH,
     MIN_RELIABLE_BBOX_AREA_PX,
-    VERY_FAR_DISTANCE_CLAMP_M,
     YOLO_FAR_DEPTH_CONFIDENCE,
     YOLO_FAR_DISTANCE_M,
     YOLO_FAR_FALLBACK_ENABLED,
@@ -41,6 +39,10 @@ from .config import (
     YOLO_FAR_MAX_BBOX_HEIGHT_PX,
     YOLO_FAR_MAX_BBOX_WIDTH_PX,
     YOLO_FAR_MIN_CONFIDENCE,
+    YOLO_FAR_UNRELIABLE_MAX_BBOX_AREA_PX,
+    YOLO_FAR_UNRELIABLE_MAX_BBOX_HEIGHT_PX,
+    YOLO_FAR_UNRELIABLE_MAX_BBOX_WIDTH_PX,
+    YOLO_FAR_UNRELIABLE_RAW_MIN_M,
 )
 from .depth.backends import infer_depth_map, load_depth_model
 from .depth.calibration import load_calibration, raw_depth_to_distance_m
@@ -294,6 +296,52 @@ def _is_yolo_far_candidate(bbox, det_confidence):
     )
 
 
+def _is_yolo_unreliable_depth_far_candidate(bbox, det_confidence, raw_distance_m):
+    if not YOLO_FAR_FALLBACK_ENABLED:
+        return False
+    if det_confidence is None or float(det_confidence) < YOLO_FAR_MIN_CONFIDENCE:
+        return False
+    if raw_distance_m is None or not math.isfinite(float(raw_distance_m)):
+        return False
+    if float(raw_distance_m) < YOLO_FAR_UNRELIABLE_RAW_MIN_M:
+        return False
+
+    width, height, area = _bbox_size_debug_from_xyxy(bbox)
+    return (
+        width <= YOLO_FAR_UNRELIABLE_MAX_BBOX_WIDTH_PX
+        or height <= YOLO_FAR_UNRELIABLE_MAX_BBOX_HEIGHT_PX
+        or area <= YOLO_FAR_UNRELIABLE_MAX_BBOX_AREA_PX
+    )
+
+
+def _should_apply_yolo_far_fallback(bbox, det_confidence, distance_m, depth_debug):
+    raw_distance_m = depth_debug.get("raw_distance_m", depth_debug.get("depth_raw_m"))
+    far_candidate = _is_yolo_far_candidate(bbox, det_confidence)
+    unreliable_depth_far_candidate = _is_yolo_unreliable_depth_far_candidate(
+        bbox,
+        det_confidence,
+        raw_distance_m,
+    )
+    if not (far_candidate or unreliable_depth_far_candidate):
+        return False
+    if distance_m is None:
+        return True
+
+    depth_quality = str(depth_debug.get("depth_quality", "bad"))
+    distance_source = str(depth_debug.get("distance_source", "missing"))
+    depth_confidence = depth_debug.get("depth_confidence")
+    low_confidence = (
+        depth_confidence is None
+        or float(depth_confidence) < DEPTH_MIN_CONFIDENCE_FOR_BASELINE
+    )
+    unreliable_depth = (
+        depth_quality in {"bad", "weak"}
+        or bool(depth_debug.get("is_outlier", False))
+        or low_confidence
+    )
+    return unreliable_depth and distance_source in {"held_previous", "missing"}
+
+
 def _append_rejected_depth_candidate(track_id, timestamp_ms, raw_depth_m, depth_confidence, bbox_area, tracking_state):
     candidates = tracking_state["rejected_depth_candidates"][track_id]
     candidates.append(
@@ -396,8 +444,6 @@ def should_accept_depth_sample(
 def _depth_used_for_position(distance_m, distance_band):
     if distance_m is None:
         return None
-    if distance_band == "very_far":
-        return min(float(distance_m), VERY_FAR_DISTANCE_CLAMP_M)
     if distance_band == "far":
         return min(float(distance_m), FAR_DISTANCE_CLAMP_M)
     return float(distance_m)
@@ -582,7 +628,7 @@ def _estimate_detection_state(
                 and range_reason == "depth_beyond_reliable_range"
                 and depth_confidence >= DEPTH_MIN_CONFIDENCE_FOR_BASELINE
             ):
-                distance_m = VERY_FAR_DISTANCE_CLAMP_M
+                distance_m = FAR_DISTANCE_CLAMP_M
             approach_mps = _approach_from_history(history, distance_m, timestamp_ms)
         else:
             distance_m = raw_depth_m
@@ -617,7 +663,10 @@ def _estimate_detection_state(
                 }
             )
 
-    if (not is_hook_turn) and distance_m is None and _is_yolo_far_candidate(bbox, det_confidence):
+    if (
+        not is_hook_turn
+        and _should_apply_yolo_far_fallback(bbox, det_confidence, distance_m, depth_debug)
+    ):
         bbox_width, bbox_height, bbox_area = _bbox_size_debug_from_xyxy(bbox)
         distance_m = float(YOLO_FAR_DISTANCE_M)
         approach_mps = 0.0
