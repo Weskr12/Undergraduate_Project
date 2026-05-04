@@ -4,6 +4,7 @@
 import gc
 import math
 import time
+from collections import defaultdict
 from copy import deepcopy
 from pathlib import Path
 
@@ -27,6 +28,7 @@ from .config import (
     DETECTION_HOLD_FRAMES,
     DRAW_HELD_DETECTIONS,
     FAR_DISTANCE_CLAMP_M,
+    HELD_SUPPRESS_IOU_THRESHOLD,
     HFOV_DEG,
     HOOK_TURN_CLASS_ID,
     MAX_VALID_DEPTH_M,
@@ -280,6 +282,132 @@ def _bbox_size_debug_from_xyxy(bbox):
     width = max(0, x2 - x1)
     height = max(0, y2 - y1)
     return width, height, width * height
+
+
+def _bbox_iou_xyxy(a, b):
+    if a is None or b is None or len(a) != 4 or len(b) != 4:
+        return 0.0
+
+    ax1, ay1, ax2, ay2 = [float(v) for v in a]
+    bx1, by1, bx2, by2 = [float(v) for v in b]
+    inter_x1 = max(ax1, bx1)
+    inter_y1 = max(ay1, by1)
+    inter_x2 = min(ax2, bx2)
+    inter_y2 = min(ay2, by2)
+    inter_w = max(0.0, inter_x2 - inter_x1)
+    inter_h = max(0.0, inter_y2 - inter_y1)
+    inter_area = inter_w * inter_h
+
+    area_a = max(0.0, ax2 - ax1) * max(0.0, ay2 - ay1)
+    area_b = max(0.0, bx2 - bx1) * max(0.0, by2 - by1)
+    union = area_a + area_b - inter_area
+    if union <= 0.0:
+        return 0.0
+    return float(inter_area / union)
+
+
+def _same_output_class(a, b):
+    return (
+        int(a.get("class_id", -1)) == int(b.get("class_id", -2))
+        or str(a.get("class_name", "")).lower() == str(b.get("class_name", "")).lower()
+    )
+
+
+def _is_suppressed_by_active_overlap(held_obj, active_objects, iou_threshold=HELD_SUPPRESS_IOU_THRESHOLD):
+    if iou_threshold <= 0:
+        return False
+
+    held_bbox = held_obj.get("bbox_xyxy")
+    for obj in active_objects:
+        if not _same_output_class(held_obj, obj):
+            continue
+        if _bbox_iou_xyxy(held_bbox, obj.get("bbox_xyxy")) >= float(iou_threshold):
+            return True
+    return False
+
+
+def _class_vote_key_from_entry(entry):
+    if len(entry) >= 2:
+        return int(entry[0]), str(entry[1])
+    raise ValueError(f"Invalid class vote entry: {entry!r}")
+
+
+def _class_vote_confidence_from_entry(entry):
+    if len(entry) >= 3:
+        return float(entry[2])
+    return 1.0
+
+
+def _inherit_class_vote_from_held_overlap(det, frame_idx, tracking_state):
+    track_id = int(det.get("track_id", -1))
+    if track_id < 0 or tracking_state["class_vote_history"].get(track_id):
+        return
+
+    bbox = det.get("bbox_xyxy")
+    best_source_track_id = None
+    best_iou = float(HELD_SUPPRESS_IOU_THRESHOLD)
+
+    for source_track_id, last_seen_frame in list(tracking_state["last_seen_frame"].items()):
+        if int(source_track_id) == track_id:
+            continue
+
+        missing_frames = int(frame_idx) - int(last_seen_frame)
+        if missing_frames <= 0 or missing_frames > DETECTION_HOLD_FRAMES:
+            continue
+
+        previous_obj = tracking_state["last_output_objects"].get(source_track_id)
+        if previous_obj is None or previous_obj.get("hook_turn_detected"):
+            continue
+
+        overlap = _bbox_iou_xyxy(bbox, previous_obj.get("bbox_xyxy"))
+        if overlap >= best_iou:
+            best_iou = overlap
+            best_source_track_id = source_track_id
+
+    if best_source_track_id is None:
+        return
+
+    source_history = tracking_state["class_vote_history"].get(best_source_track_id)
+    if source_history:
+        tracking_state["class_vote_history"][track_id].extend(source_history)
+
+    source_state = tracking_state["class_vote_state"].get(best_source_track_id)
+    if source_state is not None:
+        tracking_state["class_vote_state"][track_id] = source_state
+
+
+def _apply_track_class_vote(det, tracking_state):
+    track_id = int(det.get("track_id", -1))
+    if track_id < 0:
+        return det
+
+    class_key = (int(det["class_id"]), str(det["class_name"]))
+    confidence = max(0.0, float(det.get("confidence", 0.0)))
+    history = tracking_state["class_vote_history"][track_id]
+    history.append((class_key[0], class_key[1], confidence))
+
+    scores = defaultdict(float)
+    for entry in history:
+        scores[_class_vote_key_from_entry(entry)] += _class_vote_confidence_from_entry(entry)
+
+    max_score = max(scores.values())
+    winners = [key for key, score in scores.items() if score == max_score]
+    previous_winner = tracking_state["class_vote_state"].get(track_id)
+    if previous_winner in winners:
+        voted_class_id, voted_class_name = previous_winner
+    elif class_key in winners:
+        voted_class_id, voted_class_name = class_key
+    else:
+        voted_class_id, voted_class_name = sorted(winners, key=lambda item: (item[0], item[1]))[0]
+
+    tracking_state["class_vote_state"][track_id] = (voted_class_id, voted_class_name)
+    if voted_class_id == class_key[0] and voted_class_name == class_key[1]:
+        return det
+
+    voted_det = dict(det)
+    voted_det["class_id"] = int(voted_class_id)
+    voted_det["class_name"] = str(voted_class_name)
+    return voted_det
 
 
 def _is_yolo_far_candidate(bbox, det_confidence):
@@ -768,6 +896,8 @@ def _process_frame_detections(
     valid_distance_objects = 0
 
     for det_idx, det in enumerate(detections):
+        _inherit_class_vote_from_held_overlap(det, frame_idx, tracking_state)
+        det = _apply_track_class_vote(det, tracking_state)
         track_id = int(det["track_id"])
         class_id = int(det["class_id"])
         bbox = [int(v) for v in det["bbox_xyxy"]]
@@ -892,6 +1022,8 @@ def _apply_detection_hold(frame, frame_idx, objects, tracking_state):
         held_obj["distance_smooth_m"] = held_obj.get("distance_m")
         held_obj["approach_mps"] = 0.0
         held_obj["ttc_s"] = None
+        if _is_suppressed_by_active_overlap(held_obj, objects):
+            continue
         held_objects.append(held_obj)
         if DRAW_HELD_DETECTIONS:
             _draw_detection(frame, held_obj)
