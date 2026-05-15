@@ -131,6 +131,13 @@ def _short_class_name(class_name):
     return alias.get(name, name[:8])
 
 
+def _display_distance_m(det):
+    distance = det.get("display_distance_m")
+    if distance is None:
+        distance = det.get("distance_m")
+    return to_float_or_none(distance)
+
+
 def _iter_radar_detections(detections):
     radar_detections = []
 
@@ -139,7 +146,7 @@ def _iter_radar_detections(detections):
             continue
         if int(det.get("track_id", -1)) < 0 and not RADAR_SHOW_TEMP_TRACKS:
             continue
-        distance_m = to_float_or_none(det.get("distance_m"))
+        distance_m = _display_distance_m(det)
         bearing_deg = to_float_or_none(det.get("bearing_deg"))
         if distance_m is None or bearing_deg is None:
             continue
@@ -162,7 +169,7 @@ def _distance_to_plot_fraction(distance_m):
 
 
 def _radar_target_position(det, plot_left, plot_top, plot_right, plot_bottom):
-    distance_m = to_float_or_none(det.get("distance_m"))
+    distance_m = _display_distance_m(det)
     bearing_deg = to_float_or_none(det.get("bearing_deg"))
     if distance_m is None or bearing_deg is None:
         return None
@@ -255,7 +262,7 @@ def _find_non_overlapping_radar_position(
 
 def _radar_target_radius(det):
     risk_level = det.get("risk_level", "unknown")
-    distance_m = to_float_or_none(det.get("distance_m")) or RADAR_MAX_DISTANCE_M
+    distance_m = _display_distance_m(det) or RADAR_MAX_DISTANCE_M
     if risk_level in {"critical", "high"}:
         return 10
     if distance_m <= 8.0:
@@ -267,7 +274,7 @@ def _select_radar_list_targets(radar_detections, max_items=6):
     return sorted(
         radar_detections,
         key=lambda det: (
-            to_float_or_none(det.get("distance_m")) if det.get("distance_m") is not None else float("inf"),
+            _display_distance_m(det) if _display_distance_m(det) is not None else float("inf"),
             -RISK_SEVERITY.get(det.get("risk_level", "unknown"), 0),
             abs(to_float_or_none(det.get("bearing_deg")) or 0.0),
             int(det.get("track_id", 0)),
@@ -320,7 +327,7 @@ def _draw_radar_targets(panel, radar_detections, plot_left, plot_top, plot_right
         radar_detections,
         key=lambda det: (
             -RISK_SEVERITY.get(det.get("risk_level", "unknown"), 0),
-            to_float_or_none(det.get("distance_m")) if det.get("distance_m") is not None else float("inf"),
+            _display_distance_m(det) if _display_distance_m(det) is not None else float("inf"),
             abs(to_float_or_none(det.get("bearing_deg")) or 0.0),
         ),
     )
@@ -352,7 +359,7 @@ def _draw_radar_targets(panel, radar_detections, plot_left, plot_top, plot_right
         placed_targets.append({"x": x, "y": y, "radius": radius})
         _append_radar_trail(track_id, (x, y), history_state)
 
-        distance_m = to_float_or_none(det.get("distance_m")) or 0.0
+        distance_m = _display_distance_m(det) or 0.0
         risk_level = det.get("risk_level", "unknown")
         if risk_level in {"critical", "high"} or distance_m <= 8.0:
             label = f"{_short_class_name(det['class_name'])} {distance_m:.1f}m"
@@ -370,7 +377,7 @@ def _draw_radar_list(panel, radar_detections, panel_h):
 
     for det in list_targets:
         color = RISK_COLORS.get(det.get("risk_level"), RISK_COLORS["unknown"])
-        distance_m = to_float_or_none(det.get("distance_m")) or 0.0
+        distance_m = _display_distance_m(det) or 0.0
         bearing_label = _bearing_label(det.get("bearing_deg"))
         text = f"{bearing_label} {_short_class_name(det['class_name'])} {distance_m:>4.1f}m"
         cv2.circle(panel, (20, row_y - 5), 5, color, -1)
@@ -388,7 +395,7 @@ def _draw_radar_panel(output_frame, detections, radar_state):
     panel[:] = RADAR_BG_COLOR
 
     radar_detections = _iter_radar_detections(detections)
-    min_distance = min((det["distance_m"] for det in radar_detections), default=None)
+    min_distance = min((_display_distance_m(det) for det in radar_detections), default=None)
 
     cv2.putText(panel, "Radar", (16, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.9, RADAR_TEXT_COLOR, 2)
     cv2.putText(

@@ -50,6 +50,17 @@ def _round_or_none(value, digits=3):
     return round(float(value), int(digits))
 
 
+def _display_or_runtime_distance(obj):
+    distance = obj.get("display_distance_m")
+    if distance is None:
+        distance = obj.get("distance_m")
+    return distance
+
+
+def _runtime_distance(obj):
+    return obj.get("distance_m")
+
+
 def _build_output_object(
     det,
     bbox,
@@ -90,6 +101,8 @@ def _build_output_object(
         "depth_raw_m": _round_or_none(detection_state.get("depth_raw_m"), 3),
         "depth_smooth_m": _round_or_none(detection_state.get("depth_smooth_m"), 3),
         "depth_used_m": _round_or_none(detection_state.get("depth_used_m"), 3),
+        "display_distance_m": _round_or_none(detection_state.get("display_distance_m"), 3),
+        "display_depth_used_m": _round_or_none(detection_state.get("display_depth_used_m"), 3),
         "raw_distance_m": _round_or_none(detection_state.get("raw_distance_m"), 3),
         "distance_after_gate_m": _round_or_none(detection_state.get("distance_after_gate_m"), 3),
         "distance_smooth_m": _round_or_none(detection_state.get("distance_smooth_m"), 3),
@@ -145,7 +158,7 @@ def build_radar_payload(frame_idx, timestamp_ms, detections, meta, include_debug
         for det in detections
     ]
 
-    valid_distances = [d["distance_m"] for d in output_detections if d.get("distance_m") is not None]
+    valid_distances = [_runtime_distance(d) for d in output_detections if _runtime_distance(d) is not None]
     valid_ttc = [d["ttc_s"] for d in output_detections if d.get("ttc_s") is not None]
     stable_ttc_target_count = sum(1 for d in output_detections if d.get("stable_for_ttc", False))
     high_risk_count = sum(1 for d in output_detections if d.get("risk_level") in {"high", "critical"})
@@ -190,7 +203,9 @@ def _build_birdseye_object(obj):
             "x": round(float(x_m), 3),
             "z": round(float(z_m), 3),
         },
-        "distance_m": obj.get("distance_m"),
+        "distance_m": _display_or_runtime_distance(obj),
+        "runtime_distance_m": obj.get("distance_m"),
+        "display_distance_m": obj.get("display_distance_m"),
         "bearing_deg": obj.get("bearing_deg"),
         "risk_level": obj.get("risk_level"),
     }

@@ -27,7 +27,10 @@ def _draw_detection(frame_bgr, det):
     cv2.rectangle(frame_bgr, (x1, y1), (x2, y2), (255, 255, 255), ANNOTATION_BOX_OUTLINE_THICKNESS)
     cv2.rectangle(frame_bgr, (x1, y1), (x2, y2), color, ANNOTATION_BOX_THICKNESS)
 
-    dist_txt = "n/a" if det["distance_m"] is None else f"{det['distance_m']:.1f}m"
+    display_distance = det.get("display_distance_m")
+    if display_distance is None:
+        display_distance = det.get("distance_m")
+    dist_txt = "n/a" if display_distance is None else f"{display_distance:.1f}m"
     ttc_txt = "n/a" if det.get("ttc_s") is None else f"{det['ttc_s']:.1f}s"
     label = (
         f"ID:{det['track_id']} {det['class_name']} "
@@ -82,7 +85,12 @@ def _draw_detection(frame_bgr, det):
 
 
 def _draw_frame_summary(frame, frame_idx, payload):
-    min_distance = payload["summary"]["min_distance_m"]
+    display_distances = [
+        obj.get("display_distance_m") if obj.get("display_distance_m") is not None else obj.get("distance_m")
+        for obj in payload.get("objects", [])
+        if (obj.get("display_distance_m") if obj.get("display_distance_m") is not None else obj.get("distance_m")) is not None
+    ]
+    min_distance = min(display_distances) if display_distances else payload["summary"]["min_distance_m"]
     min_ttc_s = payload["summary"]["min_ttc_s"]
     min_distance_txt = "n/a" if min_distance is None else f"{min_distance:.1f}m"
     min_ttc_txt = "n/a" if min_ttc_s is None else f"{min_ttc_s:.1f}s"

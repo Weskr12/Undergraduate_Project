@@ -25,6 +25,7 @@ def _create_pipeline_tracking_state():
         "distance_band_state": {},
         "track_observation_history": defaultdict(lambda: deque(maxlen=TRACK_STABILITY_WINDOW)),
         "display_track_state": {},
+        "display_distance_state": {},
         "class_vote_history": defaultdict(lambda: deque(maxlen=CLASS_VOTE_HISTORY_LEN)),
         "class_vote_state": {},
         "track_hit_count": defaultdict(int),
@@ -71,6 +72,7 @@ def _cleanup_stale_tracks(frame_idx, tracking_state):
         tracking_state["distance_band_state"].pop(tid, None)
         tracking_state["track_observation_history"].pop(tid, None)
         tracking_state["display_track_state"].pop(tid, None)
+        tracking_state["display_distance_state"].pop(tid, None)
         tracking_state["class_vote_history"].pop(tid, None)
         tracking_state["class_vote_state"].pop(tid, None)
         tracking_state["track_hit_count"].pop(tid, None)

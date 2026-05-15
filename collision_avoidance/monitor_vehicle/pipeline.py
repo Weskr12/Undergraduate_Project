@@ -13,6 +13,9 @@ import torch
 from ultralytics import YOLO
 
 from .config import (
+    ACTIVE_DUPLICATE_SUPPRESS_CENTER_RATIO,
+    ACTIVE_DUPLICATE_SUPPRESS_CONTAINMENT_THRESHOLD,
+    ACTIVE_DUPLICATE_SUPPRESS_IOU_THRESHOLD,
     DEPTH_MAX_ABS_JUMP_M,
     DEPTH_MAX_PLAUSIBLE_SPEED_MPS,
     DEPTH_MAX_REL_JUMP,
@@ -28,6 +31,10 @@ from .config import (
     DETECTION_HOLD_FRAMES,
     DRAW_HELD_DETECTIONS,
     FAR_DISTANCE_CLAMP_M,
+    HELD_ID_REUSE_INTERSECTION_RATIO_THRESHOLD,
+    HELD_ID_REUSE_IOU_THRESHOLD,
+    HELD_OVERLAP_NORMALIZATION_MODE,
+    HELD_SUPPRESS_INTERSECTION_RATIO_THRESHOLD,
     HELD_SUPPRESS_IOU_THRESHOLD,
     HFOV_DEG,
     HOOK_TURN_CLASS_ID,
@@ -81,6 +88,7 @@ from .runtime import _resolve_runtime_settings
 from .tracking.smoothing import (
     _approach_from_history,
     _smooth_detection_display,
+    _smooth_display_distance,
     _smoothed_distance_from_history,
     _velocity_from_position_history,
 )
@@ -183,6 +191,8 @@ def _empty_depth_debug(depth_source="unknown", depth_quality="bad"):
         "depth_raw_m": None,
         "depth_smooth_m": None,
         "depth_used_m": None,
+        "display_distance_m": None,
+        "display_depth_used_m": None,
         "raw_distance_m": None,
         "distance_after_gate_m": None,
         "distance_smooth_m": None,
@@ -306,6 +316,85 @@ def _bbox_iou_xyxy(a, b):
     return float(inter_area / union)
 
 
+def _bbox_overlap_metrics_xyxy(a, b):
+    if a is None or b is None or len(a) != 4 or len(b) != 4:
+        return 0.0, 0.0
+
+    ax1, ay1, ax2, ay2 = [float(v) for v in a]
+    bx1, by1, bx2, by2 = [float(v) for v in b]
+    inter_x1 = max(ax1, bx1)
+    inter_y1 = max(ay1, by1)
+    inter_x2 = min(ax2, bx2)
+    inter_y2 = min(ay2, by2)
+    inter_w = max(0.0, inter_x2 - inter_x1)
+    inter_h = max(0.0, inter_y2 - inter_y1)
+    inter_area = inter_w * inter_h
+
+    area_a = max(0.0, ax2 - ax1) * max(0.0, ay2 - ay1)
+    area_b = max(0.0, bx2 - bx1) * max(0.0, by2 - by1)
+    union = area_a + area_b - inter_area
+    iou = 0.0 if union <= 0.0 else float(inter_area / union)
+    normalization_mode = str(HELD_OVERLAP_NORMALIZATION_MODE).strip().lower()
+    if normalization_mode in {"held_area", "a_area", "area_a"}:
+        normalized_area = area_a
+    elif normalization_mode in {"active_area", "b_area", "area_b"}:
+        normalized_area = area_b
+    elif normalization_mode in {"max_area", "max"}:
+        normalized_area = max(area_a, area_b)
+    elif normalization_mode in {"union", "iou"}:
+        normalized_area = union
+    else:
+        normalized_area = min(area_a, area_b)
+    intersection_ratio = 0.0 if normalized_area <= 0.0 else float(inter_area / normalized_area)
+    return iou, intersection_ratio
+
+
+def _bbox_area_xyxy(bbox):
+    if bbox is None or len(bbox) != 4:
+        return 0.0
+    x1, y1, x2, y2 = [float(v) for v in bbox]
+    return max(0.0, x2 - x1) * max(0.0, y2 - y1)
+
+
+def _bbox_center_xyxy(bbox):
+    if bbox is None or len(bbox) != 4:
+        return None
+    x1, y1, x2, y2 = [float(v) for v in bbox]
+    return ((x1 + x2) * 0.5, (y1 + y2) * 0.5)
+
+
+def _bbox_containment_ratio_xyxy(a, b):
+    if a is None or b is None or len(a) != 4 or len(b) != 4:
+        return 0.0
+
+    ax1, ay1, ax2, ay2 = [float(v) for v in a]
+    bx1, by1, bx2, by2 = [float(v) for v in b]
+    inter_x1 = max(ax1, bx1)
+    inter_y1 = max(ay1, by1)
+    inter_x2 = min(ax2, bx2)
+    inter_y2 = min(ay2, by2)
+    inter_w = max(0.0, inter_x2 - inter_x1)
+    inter_h = max(0.0, inter_y2 - inter_y1)
+    inter_area = inter_w * inter_h
+    min_area = min(_bbox_area_xyxy(a), _bbox_area_xyxy(b))
+    return 0.0 if min_area <= 0.0 else float(inter_area / min_area)
+
+
+def _bbox_center_distance_ratio_xyxy(a, b):
+    center_a = _bbox_center_xyxy(a)
+    center_b = _bbox_center_xyxy(b)
+    if center_a is None or center_b is None:
+        return 1.0
+
+    ax1, ay1, ax2, ay2 = [float(v) for v in a]
+    bx1, by1, bx2, by2 = [float(v) for v in b]
+    ref_w = max(1.0, min(max(0.0, ax2 - ax1), max(0.0, bx2 - bx1)))
+    ref_h = max(1.0, min(max(0.0, ay2 - ay1), max(0.0, by2 - by1)))
+    dx = abs(center_a[0] - center_b[0]) / ref_w
+    dy = abs(center_a[1] - center_b[1]) / ref_h
+    return float(math.hypot(dx, dy))
+
+
 def _same_output_class(a, b):
     return (
         int(a.get("class_id", -1)) == int(b.get("class_id", -2))
@@ -313,17 +402,201 @@ def _same_output_class(a, b):
     )
 
 
-def _is_suppressed_by_active_overlap(held_obj, active_objects, iou_threshold=HELD_SUPPRESS_IOU_THRESHOLD):
-    if iou_threshold <= 0:
+def _is_suppressed_by_active_overlap(
+    held_obj,
+    active_objects,
+    iou_threshold=HELD_SUPPRESS_IOU_THRESHOLD,
+    intersection_ratio_threshold=HELD_SUPPRESS_INTERSECTION_RATIO_THRESHOLD,
+):
+    if iou_threshold <= 0 and intersection_ratio_threshold <= 0:
         return False
 
     held_bbox = held_obj.get("bbox_xyxy")
     for obj in active_objects:
         if not _same_output_class(held_obj, obj):
             continue
-        if _bbox_iou_xyxy(held_bbox, obj.get("bbox_xyxy")) >= float(iou_threshold):
+        iou, intersection_ratio = _bbox_overlap_metrics_xyxy(held_bbox, obj.get("bbox_xyxy"))
+        if iou >= float(iou_threshold) or intersection_ratio >= float(intersection_ratio_threshold):
             return True
     return False
+
+
+def _is_same_frame_duplicate_detection(a, b):
+    if int(a.get("class_id", -1)) != int(b.get("class_id", -2)):
+        return False
+    if int(a.get("class_id", -1)) == HOOK_TURN_CLASS_ID:
+        return False
+
+    bbox_a = a.get("bbox_xyxy")
+    bbox_b = b.get("bbox_xyxy")
+    iou, _intersection_ratio = _bbox_overlap_metrics_xyxy(bbox_a, bbox_b)
+    if iou >= float(ACTIVE_DUPLICATE_SUPPRESS_IOU_THRESHOLD):
+        return True
+
+    containment = _bbox_containment_ratio_xyxy(bbox_a, bbox_b)
+    if containment >= float(ACTIVE_DUPLICATE_SUPPRESS_CONTAINMENT_THRESHOLD):
+        return True
+
+    center_ratio = _bbox_center_distance_ratio_xyxy(bbox_a, bbox_b)
+    return containment >= 0.6 and center_ratio <= float(ACTIVE_DUPLICATE_SUPPRESS_CENTER_RATIO)
+
+
+def _active_detection_keep_score(det, tracking_state):
+    track_id = int(det.get("track_id", -1))
+    hit_count = int(tracking_state["track_hit_count"].get(track_id, 0)) if track_id >= 0 else 0
+    confidence = max(0.0, float(det.get("confidence", 0.0)))
+    area = _bbox_area_xyxy(det.get("bbox_xyxy"))
+    # Prefer a stable existing ID, then detector confidence, then the fuller box.
+    return (hit_count, confidence, area)
+
+
+def _suppress_same_frame_duplicate_detections(detections, tracking_state):
+    if (
+        float(ACTIVE_DUPLICATE_SUPPRESS_IOU_THRESHOLD) <= 0
+        and float(ACTIVE_DUPLICATE_SUPPRESS_CONTAINMENT_THRESHOLD) <= 0
+    ):
+        return detections
+
+    kept = []
+    for det in detections:
+        replace_idx = None
+        drop_current = False
+        for idx, kept_det in enumerate(kept):
+            if not _is_same_frame_duplicate_detection(det, kept_det):
+                continue
+
+            current_score = _active_detection_keep_score(det, tracking_state)
+            kept_score = _active_detection_keep_score(kept_det, tracking_state)
+            if current_score > kept_score:
+                replace_idx = idx
+            else:
+                drop_current = True
+            break
+
+        if replace_idx is not None:
+            kept[replace_idx] = det
+        elif not drop_current:
+            kept.append(det)
+
+    return kept
+
+
+def _output_object_keep_score(obj):
+    hit_count = int(obj.get("hit_count", 0))
+    confidence = max(0.0, float(obj.get("track_confidence", obj.get("confidence", 0.0)) or 0.0))
+    area = _bbox_area_xyxy(obj.get("bbox_xyxy"))
+    return (hit_count, confidence, area)
+
+
+def _suppress_same_frame_duplicate_objects(objects):
+    kept = []
+    dropped_track_ids = []
+    for obj in objects:
+        replace_idx = None
+        drop_current = False
+        for idx, kept_obj in enumerate(kept):
+            if not _same_output_class(obj, kept_obj):
+                continue
+            if int(obj.get("class_id", -1)) == HOOK_TURN_CLASS_ID:
+                continue
+            if not _is_same_frame_duplicate_detection(obj, kept_obj):
+                continue
+
+            current_score = _output_object_keep_score(obj)
+            kept_score = _output_object_keep_score(kept_obj)
+            if current_score > kept_score:
+                dropped_track_ids.append(int(kept_obj.get("track_id", -1)))
+                replace_idx = idx
+            else:
+                dropped_track_ids.append(int(obj.get("track_id", -1)))
+                drop_current = True
+            break
+
+        if replace_idx is not None:
+            kept[replace_idx] = obj
+        elif not drop_current:
+            kept.append(obj)
+
+    return kept, [track_id for track_id in dropped_track_ids if track_id >= 0]
+
+
+def _is_vehicle_track_entry(entry):
+    return int(entry.get("class_id", -1)) != HOOK_TURN_CLASS_ID and not bool(entry.get("hook_turn_detected"))
+
+
+def _find_held_overlap_reuse_track_id(det, frame_idx, tracking_state):
+    track_id = int(det.get("track_id", -1))
+    if track_id < 0 or track_id in tracking_state["last_seen_frame"]:
+        return None
+    if int(det.get("class_id", -1)) == HOOK_TURN_CLASS_ID:
+        return None
+
+    bbox = det.get("bbox_xyxy")
+    best_source_track_id = None
+    best_score = -1.0
+    best_last_seen_frame = -1
+
+    for source_track_id, last_seen_frame in list(tracking_state["last_seen_frame"].items()):
+        missing_frames = int(frame_idx) - int(last_seen_frame)
+        if missing_frames <= 0 or missing_frames > DETECTION_HOLD_FRAMES:
+            continue
+
+        previous_obj = tracking_state["last_output_objects"].get(source_track_id)
+        if previous_obj is None or not _is_vehicle_track_entry(previous_obj):
+            continue
+
+        iou, intersection_ratio = _bbox_overlap_metrics_xyxy(bbox, previous_obj.get("bbox_xyxy"))
+        if (
+            iou < float(HELD_ID_REUSE_IOU_THRESHOLD)
+            and intersection_ratio < float(HELD_ID_REUSE_INTERSECTION_RATIO_THRESHOLD)
+        ):
+            continue
+
+        score = max(iou, intersection_ratio)
+        if score > best_score or (score == best_score and int(last_seen_frame) > best_last_seen_frame):
+            best_score = score
+            best_last_seen_frame = int(last_seen_frame)
+            best_source_track_id = int(source_track_id)
+
+    return best_source_track_id
+
+
+def _drop_track_transient_state(track_id, tracking_state):
+    if track_id < 0:
+        return
+
+    for key in (
+        "distance_history",
+        "distance_confidence_history",
+        "rejected_depth_candidates",
+        "distance_band_state",
+        "track_observation_history",
+        "display_track_state",
+        "display_distance_state",
+        "class_vote_history",
+        "class_vote_state",
+        "track_hit_count",
+        "last_seen_frame",
+        "last_output_objects",
+        "radar_position_ema",
+        "radar_position_history",
+        "position_xz_history",
+    ):
+        tracking_state[key].pop(track_id, None)
+
+
+def _reuse_held_track_id_for_new_overlap(det, frame_idx, tracking_state):
+    reuse_track_id = _find_held_overlap_reuse_track_id(det, frame_idx, tracking_state)
+    if reuse_track_id is None:
+        return det
+
+    raw_track_id = int(det.get("track_id", -1))
+    stabilized_det = dict(det)
+    stabilized_det["raw_track_id"] = raw_track_id
+    stabilized_det["track_id"] = int(reuse_track_id)
+    stabilized_det["track_id_source"] = "held_overlap_reuse"
+    _drop_track_transient_state(raw_track_id, tracking_state)
+    return stabilized_det
 
 
 def _class_vote_key_from_entry(entry):
@@ -855,6 +1128,16 @@ def _estimate_detection_state(
             depth_reliable,
         )
 
+    display_distance_m = _smooth_display_distance(
+        track_id,
+        {**depth_debug, "distance_m": distance_m},
+        tracking_state["display_distance_state"],
+    )
+    display_band = _distance_band(display_distance_m)
+    display_depth_used_m = _depth_used_for_position(display_distance_m, display_band)
+    depth_debug["display_distance_m"] = display_distance_m
+    depth_debug["display_depth_used_m"] = display_depth_used_m
+
     return {
         "raw_depth": raw_depth,
         "distance_m": distance_m,
@@ -879,6 +1162,7 @@ def _process_frame_detections(
     tracking_state,
     depth_infer_every_n,
 ):
+    detections = _suppress_same_frame_duplicate_detections(detections, tracking_state)
     depth_target_indexes, frame_depth_stale = _infer_frame_depth_if_needed(
         frame=frame,
         frame_idx=frame_idx,
@@ -896,6 +1180,7 @@ def _process_frame_detections(
     valid_distance_objects = 0
 
     for det_idx, det in enumerate(detections):
+        det = _reuse_held_track_id_for_new_overlap(det, frame_idx, tracking_state)
         _inherit_class_vote_from_held_overlap(det, frame_idx, tracking_state)
         det = _apply_track_class_vote(det, tracking_state)
         track_id = int(det["track_id"])
@@ -956,11 +1241,17 @@ def _process_frame_detections(
             track_status=track_status,
         )
         obj["track_confidence"] = round(float(det.get("confidence", 0.0)), 4)
+        if "raw_track_id" in det:
+            obj["raw_track_id"] = int(det["raw_track_id"])
+            obj["track_id_source"] = str(det.get("track_id_source", "unknown"))
         obj["hit_count"] = hit_count
         obj["track_state"] = track_state
         obj["missed_frames"] = 0
         _smooth_detection_display(obj, tracking_state["display_track_state"], frame_w, frame_h)
-        pos_x, pos_z = _bearing_distance_to_xz(obj.get("depth_used_m"), obj.get("bearing_deg"))
+        position_depth_m = obj.get("display_depth_used_m")
+        if position_depth_m is None:
+            position_depth_m = obj.get("depth_used_m")
+        pos_x, pos_z = _bearing_distance_to_xz(position_depth_m, obj.get("bearing_deg"))
         velocity_xz = (None, None)
         if track_id >= 0 and pos_x is not None and pos_z is not None:
             pos_history = tracking_state["position_xz_history"][track_id]
@@ -969,6 +1260,11 @@ def _process_frame_detections(
         obj["position_m"] = _position_dict_from_xz(pos_x, pos_z)
         obj["velocity_mps"] = _velocity_dict_from_xz(*velocity_xz)
         objects.append(obj)
+
+    objects, dropped_track_ids = _suppress_same_frame_duplicate_objects(objects)
+    for dropped_track_id in dropped_track_ids:
+        _drop_track_transient_state(dropped_track_id, tracking_state)
+    for obj in objects:
         _draw_detection(frame, obj)
 
     return {
@@ -1020,16 +1316,24 @@ def _apply_detection_hold(frame, frame_idx, objects, tracking_state):
         held_obj["distance_source"] = "held_previous"
         held_obj["distance_after_gate_m"] = held_obj.get("distance_m")
         held_obj["distance_smooth_m"] = held_obj.get("distance_m")
+        held_obj["display_distance_m"] = held_obj.get("display_distance_m", held_obj.get("distance_m"))
+        held_obj["display_depth_used_m"] = held_obj.get("display_depth_used_m", held_obj.get("depth_used_m"))
         held_obj["approach_mps"] = 0.0
         held_obj["ttc_s"] = None
         if _is_suppressed_by_active_overlap(held_obj, objects):
             continue
         held_objects.append(held_obj)
-        if DRAW_HELD_DETECTIONS:
-            _draw_detection(frame, held_obj)
 
     if held_objects:
-        return objects + held_objects
+        combined_objects, dropped_track_ids = _suppress_same_frame_duplicate_objects(objects + held_objects)
+        for dropped_track_id in dropped_track_ids:
+            _drop_track_transient_state(dropped_track_id, tracking_state)
+        if DRAW_HELD_DETECTIONS:
+            active_track_ids = {int(obj.get("track_id", -1)) for obj in objects}
+            for obj in combined_objects:
+                if int(obj.get("track_id", -1)) not in active_track_ids:
+                    _draw_detection(frame, obj)
+        return combined_objects
 
     return objects
 
@@ -1126,6 +1430,7 @@ def run_mvp_pipeline(
     debug_timeline_pretty_json_path=None,
     debug_live_json_path=None,
     max_frames=None,
+    start_frame=None,
 ):
     video_path = Path(video_path)
     output_video_path = ensure_parent(output_video_path)
@@ -1169,7 +1474,12 @@ def run_mvp_pipeline(
     depth_infer_every_n = model_bundle["depth_infer_every_n"]
     tracking_state = _create_pipeline_tracking_state()
 
-    frame_idx = 0
+    start_frame_idx = 0 if start_frame is None else max(0, int(start_frame))
+    if start_frame_idx > 0:
+        cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame_idx)
+
+    frame_idx = start_frame_idx
+    frames_processed = 0
     detected_objects = 0
     valid_distance_objects = 0
 
@@ -1179,7 +1489,7 @@ def run_mvp_pipeline(
         ret, frame = cap.read()
         if not ret:
             break
-        if max_frames is not None and frame_idx >= int(max_frames):
+        if max_frames is not None and frames_processed >= int(max_frames):
             break
 
         timestamp_ms = int(cap.get(cv2.CAP_PROP_POS_MSEC))
@@ -1276,6 +1586,7 @@ def run_mvp_pipeline(
         output_frame = _resize_output_frame(output_frame, output_video_size)
         writer.write(output_frame)
         frame_idx += 1
+        frames_processed += 1
 
     elapsed = max(time.time() - start_ts, 1e-6)
     tracking_state["last_depth_map"] = None
@@ -1290,7 +1601,7 @@ def run_mvp_pipeline(
 
     summary = _build_pipeline_summary(
         video_path=video_path,
-        frame_idx=frame_idx,
+        frame_idx=frames_processed,
         fps=fps,
         elapsed=elapsed,
         detected_objects=detected_objects,

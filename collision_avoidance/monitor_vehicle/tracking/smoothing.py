@@ -1,12 +1,24 @@
 # -*- coding: utf-8 -*-
 """Per-track distance smoothing, approach velocity, and display EMA."""
 
+from collections import deque
+
 import numpy as np
 
 from ..config import (
     APPROACH_LOOKBACK_FRAMES,
     BBOX_EMA_ALPHA,
     BEARING_EMA_ALPHA,
+    DEPTH_DISPLAY_MAX_M,
+    DISPLAY_DISTANCE_APPROACH_EMA_ALPHA,
+    DISPLAY_DISTANCE_EMA_ALPHA,
+    DISPLAY_DISTANCE_HISTORY_LEN,
+    DISPLAY_DISTANCE_HOLD_FRAMES,
+    DISPLAY_DISTANCE_MAX_APPROACH_STEP_M,
+    DISPLAY_DISTANCE_MAX_RECEDING_STEP_M,
+    DISPLAY_DISTANCE_MEDIAN_WINDOW,
+    DISPLAY_DISTANCE_SMOOTHING_ENABLED,
+    MIN_DEPTH,
     SMOOTH_WINDOW,
 )
 from ..detection.bbox import _bbox_xyxy_to_center_size, _center_size_to_bbox_xyxy
@@ -22,6 +34,104 @@ def _smoothed_distance_from_history(history):
     if not smooth_values:
         return None
     return float(np.median(smooth_values))
+
+
+def _finite_distance(value):
+    value = to_float_or_none(value)
+    if value is None:
+        return None
+    if not np.isfinite(value) or value <= MIN_DEPTH or value > DEPTH_DISPLAY_MAX_M:
+        return None
+    return float(value)
+
+
+def _finite_fallback_distance(value):
+    value = to_float_or_none(value)
+    if value is None:
+        return None
+    if not np.isfinite(value) or value <= MIN_DEPTH:
+        return None
+    return float(value)
+
+
+def _display_distance_source(detection_state):
+    distance_source = str(detection_state.get("distance_source", ""))
+    if distance_source == "yolo_size_fallback":
+        return _finite_fallback_distance(detection_state.get("distance_m"))
+
+    raw_distance = _finite_distance(detection_state.get("raw_distance_m"))
+    if raw_distance is not None and detection_state.get("depth_quality") in {"good", "weak"}:
+        return raw_distance
+    return _finite_distance(detection_state.get("distance_m"))
+
+
+def _robust_recent_median(history):
+    values = np.array(list(history)[-DISPLAY_DISTANCE_MEDIAN_WINDOW:], dtype=float)
+    if len(values) == 0:
+        return None
+    if len(values) < 4:
+        return float(np.median(values))
+
+    local_median = float(np.median(values))
+    residuals = np.abs(values - local_median)
+    mad = float(np.median(residuals))
+    threshold = max(1.2, 3.0 * 1.4826 * mad)
+    filtered = values[residuals <= threshold]
+    if len(filtered) == 0:
+        filtered = values
+    return float(np.median(filtered))
+
+
+def _limit_display_step(previous, proposed):
+    delta = float(proposed) - float(previous)
+    if delta >= 0.0:
+        max_step = float(DISPLAY_DISTANCE_MAX_RECEDING_STEP_M)
+    else:
+        max_step = float(DISPLAY_DISTANCE_MAX_APPROACH_STEP_M)
+    return float(previous) + float(np.clip(delta, -max_step, max_step))
+
+
+def _smooth_display_distance(track_id, detection_state, display_distance_state):
+    if not DISPLAY_DISTANCE_SMOOTHING_ENABLED:
+        return _finite_distance(detection_state.get("distance_m"))
+
+    source = _display_distance_source(detection_state)
+    if track_id < 0:
+        return source
+
+    state = display_distance_state.get(track_id)
+    if state is None:
+        state = {
+            "history": deque(maxlen=DISPLAY_DISTANCE_HISTORY_LEN),
+            "smooth": None,
+            "missing_frames": 0,
+        }
+        display_distance_state[track_id] = state
+
+    if source is None:
+        state["missing_frames"] = int(state.get("missing_frames", 0)) + 1
+        if state.get("smooth") is not None and state["missing_frames"] <= DISPLAY_DISTANCE_HOLD_FRAMES:
+            return float(state["smooth"])
+        return None
+
+    state["missing_frames"] = 0
+    state["history"].append(float(source))
+    target = _robust_recent_median(state["history"])
+    if target is None:
+        return None
+
+    previous = state.get("smooth")
+    if previous is None:
+        smooth = float(target)
+    else:
+        alpha = DISPLAY_DISTANCE_EMA_ALPHA
+        if float(target) < float(previous):
+            alpha = max(alpha, DISPLAY_DISTANCE_APPROACH_EMA_ALPHA)
+        proposed = (1.0 - float(alpha)) * float(previous) + float(alpha) * float(target)
+        smooth = _limit_display_step(previous, proposed)
+
+    state["smooth"] = float(smooth)
+    return float(smooth)
 
 
 def _approach_from_history(history, distance_m, timestamp_ms):
