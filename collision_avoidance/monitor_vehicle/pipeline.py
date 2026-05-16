@@ -710,8 +710,8 @@ def _is_yolo_unreliable_depth_far_candidate(bbox, det_confidence, raw_distance_m
     width, height, area = _bbox_size_debug_from_xyxy(bbox)
     return (
         width <= YOLO_FAR_UNRELIABLE_MAX_BBOX_WIDTH_PX
-        or height <= YOLO_FAR_UNRELIABLE_MAX_BBOX_HEIGHT_PX
-        or area <= YOLO_FAR_UNRELIABLE_MAX_BBOX_AREA_PX
+        and height <= YOLO_FAR_UNRELIABLE_MAX_BBOX_HEIGHT_PX
+        and area <= YOLO_FAR_UNRELIABLE_MAX_BBOX_AREA_PX
     )
 
 
